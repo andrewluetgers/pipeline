@@ -1,8 +1,61 @@
 import {ulid} from '@nullserve/ulid'
 import pQueue from 'async/priorityQueue'
 import {reject} from 'lodash'
-import workerpool from 'workerpool'
+import {pool} from 'workerpool'
 
+
+interface WebWorkerPoolOptions {
+	script: string;
+	concurrency: number;
+}
+
+interface Task {
+	id: string;
+	isTask: boolean;
+	priority: number;
+	progress: any[];
+	start: number;
+	finish: number | null;
+	workItem: any;
+}
+
+interface Stage {
+	name: string;
+	worker: Function;
+	priority: number;
+	concurrency: number;
+	index: number;
+	q: any;
+	pool: any;
+	stage: (taskOrInitialWorkItem: any, customPriority?: number) => void;
+}
+
+interface PipelineOptions {
+	poolImpl?: (opts: WebWorkerPoolOptions) => any;
+	stageDefs?: StageDef[];
+	saveCheckpoint?: (checkpoint: any) => void;
+	loadCheckpoint?: (callback: (checkpoint: any) => void) => void;
+	onUpdate?: (data: any) => void;
+}
+
+interface StageDef {
+	name: string;
+	worker: Function;
+	concurrency: number;
+}
+
+function webWorkerPool({concurrency: maxWorkers, ...rest}: WebWorkerPoolOptions) {
+	let p = pool({maxWorkers, ...rest});
+
+	return {
+		exec(worker: Function, args: [Task, Stage]) {
+			p.exec(worker, args);
+		},
+		terminate() {
+			p.terminate();
+		}
+	};
+}
 
 /*
  pipeline
@@ -34,13 +87,19 @@ import workerpool from 'workerpool'
 
 */
 
-export default function pipeline(stageDefs = [], saveCheckpoint, loadCheckpoint, onUpdate) {
-	let stages = [],
-		tasks = []
+export default function pipeline({
+	poolImpl = webWorkerPool,
+	stageDefs = [],
+	saveCheckpoint,
+	loadCheckpoint,
+	onUpdate
+}: PipelineOptions) {
+	let stages: Stage[] = [],
+		tasks: Task[] = [];
 
 	function addStage(stageDef) {
 		let {name, worker, concurrency} = stageDef,
-			pool = workerpool.pool(null, {maxWorkers: concurrency}),
+			pool = poolImpl({concurrency}),
 			q = pQueue((task, next) => work(task, next), concurrency),
 			index = stages.length,
 			stage = {
@@ -154,6 +213,7 @@ export default function pipeline(stageDefs = [], saveCheckpoint, loadCheckpoint,
 
 	let api = {
 		stages,
+		tasks,
 		addStage,
 		stage
 	}
